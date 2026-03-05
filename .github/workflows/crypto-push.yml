@@ -87,7 +87,7 @@ jobs:
 时间: {time_str}
 
 ### 行情
-| 币种 | 价格 | 24h |
+| 币种 | 价格 | 24h涨跌 |
 |:---:|---:|---:|
 | BTC | ${bp:,.0f} | {bc:+.2f}% |
 | ETH | ${ep:,.0f} | {ec:+.2f}% |
@@ -104,8 +104,6 @@ jobs:
           
           if send_msg(f'行情信号 {sig}', text1):
               print('✅ 行情推送成功')
-          else:
-              print('❌ 行情推送失败')
           
           # === 2. ETH信号 ===
           print('获取ETH数据...')
@@ -115,7 +113,6 @@ jobs:
               closes = [float(k[4]) for k in klines]
               price = closes[-1]
               
-              # EMA
               def calc_ema(data, period):
                   k = 2 / (period + 1)
                   ema_val = sum(data[:period]) / period
@@ -126,7 +123,6 @@ jobs:
               e20 = calc_ema(closes, 20)
               e50 = calc_ema(closes, 50)
               
-              # RSI
               gains, losses = [], []
               for i in range(1, len(closes)):
                   change = closes[i] - closes[i-1]
@@ -136,7 +132,6 @@ jobs:
               avg_loss = sum(losses[-14:]) / 14
               rsi = 100 - 100 / (1 + avg_gain / avg_loss) if avg_loss > 0 else 100
               
-              # 布林带
               sma = sum(closes[-20:]) / 20
               std = (sum((c - sma) ** 2 for c in closes[-20:]) / 20) ** 0.5
               bb_u = sma + 2 * std
@@ -186,8 +181,6 @@ ETH Pro 15分钟分析"""
               
               if send_msg(f'ETH信号 {sig2}', text2):
                   print('✅ ETH推送成功')
-              else:
-                  print('❌ ETH推送失败')
           
           # === 3. 模拟盘 ===
           print('发送模拟盘数据...')
@@ -222,8 +215,6 @@ ETH Pro 15分钟分析"""
           
           if send_msg('模拟盘日报', text3):
               print('✅ 模拟盘推送成功')
-          else:
-              print('❌ 模拟盘推送失败')
           
           print('全部推送完成!')
           PYEOF
