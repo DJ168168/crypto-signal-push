@@ -1,15 +1,9 @@
-# 1. 克隆沙箱中的代码（或直接复制文件）
-# 如果你有git，可以直接执行：
-
-# 2. 创建文件夹
-mkdir crypto-signal-push
 cd crypto-signal-push
-git init
 
-# 3. 创建必要文件
-mkdir -p .github/workflows
+# 删除错误文件
+rm .github/workflows/main.yml
 
-# 4. 创建 GitHub Actions 配置
+# 创建正确的文件
 cat > .github/workflows/crypto-push.yml << 'EOF'
 name: Crypto Signal Push
 
@@ -41,7 +35,6 @@ jobs:
           WEBHOOK = '${{ secrets.DINGTALK_WEBHOOK }}'
           now = datetime.now(timezone(timedelta(hours=8)))
           
-          # 获取价格
           btc = requests.get('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=BTCUSDT', timeout=10).json()
           eth = requests.get('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=ETHUSDT', timeout=10).json()
           fg = requests.get('https://api.alternative.me/fng/', timeout=10).json()['data'][0]
@@ -50,7 +43,6 @@ jobs:
           eth_p, eth_c = float(eth['lastPrice']), float(eth['priceChangePercent'])
           fg_v, fg_n = int(fg['value']), fg['value_classification']
           
-          # 信号分析
           score = 50
           if fg_v <= 25: score += 25
           elif fg_v >= 75: score -= 25
@@ -69,7 +61,7 @@ jobs:
 
 **加密货币市场多空信号提醒**
 
-⏰ {now.strftime('%Y/%m/%d %H:%M:%S')}
+⏰ {now.strftime(\"%Y/%m/%d %H:%M:%S\")}
 
 ### 💰 行情
 - BTC: \${btc_p:,.2f} ({btc_c:+.2f}%)
@@ -93,9 +85,7 @@ jobs:
       
       - run: echo "Done"
 
-# 5. 提交推送
+# 提交推送
 git add .
-git commit -m "feat: 加密货币信号自动推送"
-git branch -M main
-git remote add origin https://github.com/DJ168168/crypto-signal-push.git
-git push -u origin main
+git commit -m "fix: 修复工作流文件"
+git push
