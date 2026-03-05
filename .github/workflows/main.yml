@@ -1,0 +1,101 @@
+# 1. 克隆沙箱中的代码（或直接复制文件）
+# 如果你有git，可以直接执行：
+
+# 2. 创建文件夹
+mkdir crypto-signal-push
+cd crypto-signal-push
+git init
+
+# 3. 创建必要文件
+mkdir -p .github/workflows
+
+# 4. 创建 GitHub Actions 配置
+cat > .github/workflows/crypto-push.yml << 'EOF'
+name: Crypto Signal Push
+
+on:
+  schedule:
+    - cron: '0,30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  push-signal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - run: pip install requests
+      
+      - name: Push Signal
+        env:
+          WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+        run: |
+          python -c "
+          import requests
+          from datetime import datetime, timezone, timedelta
+          
+          WEBHOOK = '${{ secrets.DINGTALK_WEBHOOK }}'
+          now = datetime.now(timezone(timedelta(hours=8)))
+          
+          # 获取价格
+          btc = requests.get('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=BTCUSDT', timeout=10).json()
+          eth = requests.get('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=ETHUSDT', timeout=10).json()
+          fg = requests.get('https://api.alternative.me/fng/', timeout=10).json()['data'][0]
+          
+          btc_p, btc_c = float(btc['lastPrice']), float(btc['priceChangePercent'])
+          eth_p, eth_c = float(eth['lastPrice']), float(eth['priceChangePercent'])
+          fg_v, fg_n = int(fg['value']), fg['value_classification']
+          
+          # 信号分析
+          score = 50
+          if fg_v <= 25: score += 25
+          elif fg_v >= 75: score -= 25
+          if btc_c > 3: score += 15
+          elif btc_c < -3: score -= 15
+          score = max(0, min(100, score))
+          
+          sig = '🚀 STRONG BUY' if score >= 70 else '🟢 BUY' if score >= 55 else '🔴 SELL' if score <= 45 else '⚪ NEUTRAL'
+          fg_e = '😱' if fg_v <= 20 else '😨' if fg_v <= 40 else '😐' if fg_v <= 60 else '😊'
+          
+          msg = {
+            'msgtype': 'markdown',
+            'markdown': {
+              'title': f'{sig} 加密货币信号',
+              'text': f'''## {sig} 加密货币市场信号
+
+**加密货币市场多空信号提醒**
+
+⏰ {now.strftime('%Y/%m/%d %H:%M:%S')}
+
+### 💰 行情
+- BTC: \${btc_p:,.2f} ({btc_c:+.2f}%)
+- ETH: \${eth_p:,.2f} ({eth_c:+.2f}%)
+
+### {fg_e} 市场情绪
+恐慌贪婪: {fg_v} ({fg_n})
+
+### 🎯 信号
+方向: {sig} | 评分: {score}/100
+
+---
+> GitHub Actions 自动推送
+'''
+            }
+          }
+          
+          r = requests.post(WEBHOOK, json=msg, timeout=10)
+          print('✅ 推送成功' if r.json().get('errcode')==0 else f'❌ {r.json()}')
+          "
+      
+      - run: echo "Done"
+
+# 5. 提交推送
+git add .
+git commit -m "feat: 加密货币信号自动推送"
+git branch -M main
+git remote add origin https://github.com/DJ168168/crypto-signal-push.git
+git push -u origin main
