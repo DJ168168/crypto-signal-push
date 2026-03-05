@@ -50,11 +50,10 @@ jobs:
           def send(title, text):
               msg = {'msgtype': 'markdown', 'markdown': {'title': title, 'text': text}}
               req = urllib.request.Request(WEBHOOK, data=json.dumps(msg).encode(), headers={'Content-Type': 'application/json'})
-              return json.loads(urllib.request.urlopen(req, timeout=10).read()).get('errcode') == 0
+              return json.loads(urllib.request.urlopen(req, timeout=10).read().get('errcode') == 0
           
           now = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           
-          # 获取数据
           k1h = fetch('https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=100') or []
           k4h = fetch('https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=4h&limit=50') or []
           ticker = fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=BTCUSDT') or {}
@@ -69,12 +68,10 @@ jobs:
           atr_v = atr(k1h)
           change = float(ticker.get('priceChangePercent', 0))
           
-          # 评分
           score = 50
           sigs = []
           warns = []
           
-          # 趋势
           e7, e21, e50 = ema(closes, 7), ema(closes, 21), ema(closes, 50)
           if e7 > e21 > e50:
               score += 15
@@ -89,22 +86,20 @@ jobs:
                   score += 5
                   sigs.append('4H向上')
           
-          # RSI
           r = rsi(closes)
           if r < 25:
               score += 15
-              sigs.append(f'RSI超卖{r:.0f}')
+              sigs.append('RSI超卖' + str(int(r)))
           elif r < 35:
               score += 10
-              sigs.append(f'RSI偏低{r:.0f}')
+              sigs.append('RSI偏低' + str(int(r)))
           elif r > 75:
               score -= 15
-              warns.append(f'RSI超买{r:.0f}')
+              warns.append('RSI超买' + str(int(r)))
           elif r > 65:
               score -= 10
-              warns.append(f'RSI偏高{r:.0f}')
+              warns.append('RSI偏高' + str(int(r)))
           
-          # MACD
           macd = ema(closes, 12) - ema(closes, 26)
           if macd > 0:
               score += 10
@@ -112,7 +107,6 @@ jobs:
           else:
               score -= 5
           
-          # 布林带
           sma = sum(closes[-20:]) / 20
           std = math.sqrt(sum((c - sma)**2 for c in closes[-20:]) / 20)
           bb_u, bb_l = sma + 2*std, sma - 2*std
@@ -125,34 +119,31 @@ jobs:
               score -= 10
               warns.append('布林上轨')
           
-          # 恐慌贪婪
           fg_v = int(fg['data'][0]['value']) if fg.get('data') else 50
           fg_c = fg['data'][0].get('value_classification', 'Neutral') if fg.get('data') else 'Neutral'
           
           if fg_v <= 15:
               score += 15
-              sigs.append(f'极度恐慌{fg_v}')
+              sigs.append('极度恐慌' + str(fg_v))
           elif fg_v <= 25:
               score += 12
-              sigs.append(f'恐慌{fg_v}')
+              sigs.append('恐慌' + str(fg_v))
           elif fg_v >= 85:
               score -= 15
-              warns.append(f'极度贪婪{fg_v}')
+              warns.append('极度贪婪' + str(fg_v))
           elif fg_v >= 75:
               score -= 12
-              warns.append(f'贪婪{fg_v}')
+              warns.append('贪婪' + str(fg_v))
           
-          # 24h涨跌
           if change < -5:
               score += 10
-              sigs.append(f'暴跌{change:.1f}%')
+              sigs.append('暴跌' + str(round(change, 1)) + '%')
           elif change > 5:
               score -= 10
-              warns.append(f'暴涨{change:.1f}%')
+              warns.append('暴涨' + str(round(change, 1)) + '%')
           
           score = max(0, min(100, score))
           
-          # 信号
           if score >= 75:
               sig, act, lev = '强多', '做多', 5
           elif score >= 60:
@@ -164,7 +155,6 @@ jobs:
           else:
               sig, act, lev = '中性', '观望', 1
           
-          # 止损止盈
           if act == '做多':
               sl, tp1, tp2 = price - 2*atr_v, price + 1.5*atr_v, price + 3*atr_v
           elif act == '做空':
@@ -174,54 +164,40 @@ jobs:
           
           win_rate = min(85, max(35, 50 + (score - 50) * 0.7))
           
-          # 构建消息
           nl = chr(10)
-          t = f'''## BTC Pro信号 {sig}
-
-加密货币市场多空信号提醒
-
-时间: {now}
-
-### 价格
-**${int(price)}** ({change:+.2f}%)
-
-### 评分
-**{score}/100** | 胜率: {int(win_rate)}%
-
-### 技术指标
-| 指标 | 数值 | 信号 |
-|:---:|---:|:---:|
-| EMA7 | ${int(e7)} | {'多' if price > e7 else '空'} |
-| EMA21 | ${int(e21)} | {'多' if price > e21 else '空'} |
-| RSI | {int(r)} | {'超卖' if r < 35 else '超买' if r > 65 else '中性'} |
-| MACD | {'+' if macd > 0 else '-'} | {'金叉' if macd > 0 else '死叉'} |
-| 布林 | {int(bb_pos*100)}% | {'下轨' if bb_pos < 0.3 else '上轨' if bb_pos > 0.7 else '中轨'} |
-
-### 情绪
-恐慌贪婪: **{fg_v}** ({fg_c})
-
-### 信号依据
-{chr(10).join(['- ' + s for s in sigs]) if sigs else '- 暂无'}
-
-### 风险提示
-{chr(10).join(['- ' + w for w in warns]) if warns else '- 无'}
-
-### 交易计划
-| 项目 | 价格 |
-|:---:|---:|
-| 入场 | ${int(price)} |
-| 止损 | ${int(sl)} |
-| 止盈1 | ${int(tp1)} |
-| 止盈2 | ${int(tp2)} |
-| 杠杆 | {lev}x |
-
-### 建议
-> {act}{'，严格止损' if act != '观望' else ''}
-
----
-BTC Pro 高胜率信号'''
+          sig_text = nl.join(['- ' + s for s in sigs]) if sigs else '- 暂无'
+          warn_text = nl.join(['- ' + w for w in warns]) if warns else '- 无'
           
-          print('BTC:', '成功' if send(f'BTC Pro {sig}', t) else '失败')
+          text = '## BTC Pro信号 ' + sig + nl + nl
+          text += '加密货币市场多空信号提醒' + nl + nl
+          text += '时间 ' + now + nl + nl
+          text += '### 价格' + nl
+          text += '**$' + str(int(price)) + '** (' + str(round(change, 2)) + '%)' + nl + nl
+          text += '### 评分' + nl
+          text += '**' + str(score) + '/100** | 胜率 ' + str(int(win_rate)) + '%' + nl + nl
+          text += '### 技术指标' + nl
+          text += '| 指标 | 数值 | 信号 |' + nl
+          text += '|---|---|---|' + nl
+          text += '| EMA7 | $' + str(int(e7)) + ' | ' + ('多' if price > e7 else '空') + ' |' + nl
+          text += '| EMA21 | $' + str(int(e21)) + ' | ' + ('多' if price > e21 else '空') + ' |' + nl
+          text += '| RSI | ' + str(int(r)) + ' | ' + ('超卖' if r < 35 else '超买' if r > 65 else '中性') + ' |' + nl
+          text += '| MACD | ' + ('+' if macd > 0 else '-') + ' | ' + ('金叉' if macd > 0 else '死叉') + ' |' + nl + nl
+          text += '### 情绪' + nl
+          text += '恐慌贪婪 **' + str(fg_v) + '** (' + fg_c + ')' + nl + nl
+          text += '### 信号依据' + nl + sig_text + nl + nl
+          text += '### 风险提示' + nl + warn_text + nl + nl
+          text += '### 交易计划' + nl
+          text += '| 项目 | 价格 |' + nl
+          text += '|---|---|' + nl
+          text += '| 入场 | $' + str(int(price)) + ' |' + nl
+          text += '| 止损 | $' + str(int(sl)) + ' |' + nl
+          text += '| 止盈1 | $' + str(int(tp1)) + ' |' + nl
+          text += '| 止盈2 | $' + str(int(tp2)) + ' |' + nl
+          text += '| 杠杆 | ' + str(lev) + 'x |' + nl + nl
+          text += '### 建议' + nl + '> ' + act + ('，严格止损' if act != '观望' else '') + nl + nl
+          text += '---' + nl + 'BTC Pro 高胜率信号'
+          
+          print('BTC', '成功' if send('BTC Pro ' + sig, text) else '失败')
           PYEND
 
       - name: ETH Signal
@@ -265,7 +241,7 @@ BTC Pro 高胜率信号'''
           def send(title, text):
               msg = {'msgtype': 'markdown', 'markdown': {'title': title, 'text': text}}
               req = urllib.request.Request(WEBHOOK, data=json.dumps(msg).encode(), headers={'Content-Type': 'application/json'})
-              return json.loads(urllib.request.urlopen(req, timeout=10).read()).get('errcode') == 0
+              return json.loads(urllib.request.urlopen(req, timeout=10).read().get('errcode') == 0
           
           now = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           
@@ -296,16 +272,16 @@ BTC Pro 高胜率信号'''
           r = rsi(closes)
           if r < 25:
               score += 15
-              sigs.append(f'RSI超卖{r:.0f}')
+              sigs.append('RSI超卖' + str(int(r)))
           elif r < 35:
               score += 10
-              sigs.append(f'RSI偏低{r:.0f}')
+              sigs.append('RSI偏低' + str(int(r)))
           elif r > 75:
               score -= 15
-              warns.append(f'RSI超买{r:.0f}')
+              warns.append('RSI超买' + str(int(r)))
           elif r > 65:
               score -= 10
-              warns.append(f'RSI偏高{r:.0f}')
+              warns.append('RSI偏高' + str(int(r)))
           
           macd = ema(closes, 12) - ema(closes, 26)
           if macd > 0:
@@ -328,10 +304,10 @@ BTC Pro 高胜率信号'''
           
           if change < -5:
               score += 8
-              sigs.append(f'暴跌{change:.1f}%')
+              sigs.append('暴跌' + str(round(change, 1)) + '%')
           elif change > 5:
               score -= 8
-              warns.append(f'暴涨{change:.1f}%')
+              warns.append('暴涨' + str(round(change, 1)) + '%')
           
           score = max(0, min(100, score))
           
@@ -355,49 +331,38 @@ BTC Pro 高胜率信号'''
           
           win_rate = min(85, max(35, 50 + (score - 50) * 0.7))
           
-          t = f'''## ETH Pro信号 {sig}
-
-加密货币市场多空信号提醒
-
-时间: {now}
-
-### 价格
-**${int(price)}** ({change:+.2f}%)
-
-### 评分
-**{score}/100** | 胜率: {int(win_rate)}%
-
-### 技术指标
-| 指标 | 数值 | 信号 |
-|:---:|---:|:---:|
-| EMA7 | ${int(e7)} | {'多' if price > e7 else '空'} |
-| EMA21 | ${int(e21)} | {'多' if price > e21 else '空'} |
-| RSI | {int(r)} | {'超卖' if r < 35 else '超买' if r > 65 else '中性'} |
-| MACD | {'+' if macd > 0 else '-'} | {'金叉' if macd > 0 else '死叉'} |
-| ATR | ${atr_v:.2f} | 波动率 |
-
-### 信号依据
-{chr(10).join(['- ' + s for s in sigs]) if sigs else '- 暂无'}
-
-### 风险提示
-{chr(10).join(['- ' + w for w in warns]) if warns else '- 无'}
-
-### 交易计划
-| 项目 | 价格 |
-|:---:|---:|
-| 入场 | ${int(price)} |
-| 止损 | ${int(sl)} |
-| 止盈1 | ${int(tp1)} |
-| 止盈2 | ${int(tp2)} |
-| 杠杆 | {lev}x |
-
-### 建议
-> {act}{'，严格止损' if act != '观望' else ''}
-
----
-ETH Pro 15分钟分析'''
+          nl = chr(10)
+          sig_text = nl.join(['- ' + s for s in sigs]) if sigs else '- 暂无'
+          warn_text = nl.join(['- ' + w for w in warns]) if warns else '- 无'
           
-          print('ETH:', '成功' if send(f'ETH Pro {sig}', t) else '失败')
+          text = '## ETH Pro信号 ' + sig + nl + nl
+          text += '加密货币市场多空信号提醒' + nl + nl
+          text += '时间 ' + now + nl + nl
+          text += '### 价格' + nl
+          text += '**$' + str(int(price)) + '** (' + str(round(change, 2)) + '%)' + nl + nl
+          text += '### 评分' + nl
+          text += '**' + str(score) + '/100** | 胜率 ' + str(int(win_rate)) + '%' + nl + nl
+          text += '### 技术指标' + nl
+          text += '| 指标 | 数值 | 信号 |' + nl
+          text += '|---|---|---|' + nl
+          text += '| EMA7 | $' + str(int(e7)) + ' | ' + ('多' if price > e7 else '空') + ' |' + nl
+          text += '| EMA21 | $' + str(int(e21)) + ' | ' + ('多' if price > e21 else '空') + ' |' + nl
+          text += '| RSI | ' + str(int(r)) + ' | ' + ('超卖' if r < 35 else '超买' if r > 65 else '中性') + ' |' + nl
+          text += '| ATR | $' + str(round(atr_v, 2)) + ' | 波动率 |' + nl + nl
+          text += '### 信号依据' + nl + sig_text + nl + nl
+          text += '### 风险提示' + nl + warn_text + nl + nl
+          text += '### 交易计划' + nl
+          text += '| 项目 | 价格 |' + nl
+          text += '|---|---|' + nl
+          text += '| 入场 | $' + str(int(price)) + ' |' + nl
+          text += '| 止损 | $' + str(int(sl)) + ' |' + nl
+          text += '| 止盈1 | $' + str(int(tp1)) + ' |' + nl
+          text += '| 止盈2 | $' + str(int(tp2)) + ' |' + nl
+          text += '| 杠杆 | ' + str(lev) + 'x |' + nl + nl
+          text += '### 建议' + nl + '> ' + act + ('，严格止损' if act != '观望' else '') + nl + nl
+          text += '---' + nl + 'ETH Pro 15分钟分析'
+          
+          print('ETH', '成功' if send('ETH Pro ' + sig, text) else '失败')
           PYEND
 
       - name: Trading Account
@@ -411,39 +376,32 @@ ETH Pro 15分钟分析'''
           def send(title, text):
               msg = {'msgtype': 'markdown', 'markdown': {'title': title, 'text': text}}
               req = urllib.request.Request(WEBHOOK, data=json.dumps(msg).encode(), headers={'Content-Type': 'application/json'})
-              return json.loads(urllib.request.urlopen(req, timeout=10).read()).get('errcode') == 0
+              return json.loads(urllib.request.urlopen(req, timeout=10).read().get('errcode') == 0
           
           now = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+          nl = chr(10)
           
-          t = f'''## 模拟盘日报
-
-加密货币市场多空信号提醒
-
-时间: {now}
-
-### 账户
-- 总资产: **$4,012.68**
-- 未实现盈亏: **+$456.17**
-- 持仓数: 3个
-
-### 持仓
-| 币种 | 方向 | 数量 | 开仓价 | 杠杆 |
-|:---:|:---:|---:|---:|:---:|
-| SOL | SHORT | 61.97 | $92.26 | 30x |
-| ETH | SHORT | 1.35 | $2,150.94 | 30x |
-| BTC | SHORT | 0.067 | $73,257.78 | 30x |
-
-### 统计
-- 总交易: 15次
-- 胜率: **60%**
-- 累计盈亏: +$512.68
-
-### 建议
-- 设置止损控制风险
-- 单笔风险<2%
-
----
-每30分钟自动更新'''
+          text = '## 模拟盘日报' + nl + nl
+          text += '加密货币市场多空信号提醒' + nl + nl
+          text += '时间 ' + now + nl + nl
+          text += '### 账户' + nl
+          text += '- 总资产 **$4,012.68**' + nl
+          text += '- 未实现盈亏 **+$456.17**' + nl
+          text += '- 持仓数 3个' + nl + nl
+          text += '### 持仓' + nl
+          text += '| 币种 | 方向 | 数量 | 开仓价 | 杠杆 |' + nl
+          text += '|---|---|---|---|---|' + nl
+          text += '| SOL | SHORT | 61.97 | $92.26 | 30x |' + nl
+          text += '| ETH | SHORT | 1.35 | $2,150.94 | 30x |' + nl
+          text += '| BTC | SHORT | 0.067 | $73,257.78 | 30x |' + nl + nl
+          text += '### 统计' + nl
+          text += '- 总交易 15次' + nl
+          text += '- 胜率 **60%**' + nl
+          text += '- 累计盈亏 +$512.68' + nl + nl
+          text += '### 建议' + nl
+          text += '- 设置止损控制风险' + nl
+          text += '- 单笔风险小于2%' + nl + nl
+          text += '---' + nl + '每30分钟自动更新'
           
-          print('模拟盘:', '成功' if send('模拟盘日报', t) else '失败')
+          print('模拟盘', '成功' if send('模拟盘日报', text) else '失败')
           PYEND
