@@ -1,6 +1,3 @@
-# 加密货币信号推送 - GitHub Actions
-# 每10分钟自动推送：行情信号 + ETH信号 + 模拟盘
-
 name: Crypto Signal Push
 
 on:
@@ -11,12 +8,11 @@ on:
 jobs:
   push-signals:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
     
     steps:
-      - name: 1. 行情信号推送
+      - name: 行情信号
         run: |
-          python3 << 'PYEOF'
+          python3 -c "
           import urllib.request, json
           from datetime import datetime, timezone, timedelta
           
@@ -28,13 +24,12 @@ jobs:
                   return json.loads(urllib.request.urlopen(req, timeout=15).read())
               except: return None
           
-          def send_msg(title, text):
+          def send(title, text):
               msg = {'msgtype': 'markdown', 'markdown': {'title': title, 'text': text}}
               req = urllib.request.Request(WEBHOOK, data=json.dumps(msg).encode(), headers={'Content-Type': 'application/json'})
-              return json.loads(urllib.request.urlopen(req, timeout=10).read()).get('errcode') == 0
+              urllib.request.urlopen(req, timeout=10)
           
           now = datetime.now(timezone(timedelta(hours=8)))
-          
           btc = fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=BTCUSDT') or {}
           eth = fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=ETHUSDT') or {}
           fg = fetch('https://api.alternative.me/fng/') or {}
@@ -44,48 +39,19 @@ jobs:
           ep = float(eth.get('lastPrice', 0))
           ec = float(eth.get('priceChangePercent', 0))
           fv = int(fg.get('data', [{}])[0].get('value', 50)) if fg.get('data') else 50
-          fc = fg.get('data', [{}])[0].get('value_classification', 'Neutral') if fg.get('data') else 'Neutral'
           
-          score = 50
-          signals = []
-          if bc < -3: score += 15; signals.append('BTC下跌 逢低布局')
-          elif bc > 3: score -= 10; signals.append('BTC上涨 注意回调')
-          if fv <= 25: score += 25; signals.append('极度恐慌 买点')
-          elif fv >= 75: score -= 25; signals.append('极度贪婪 高风险')
-          score = max(0, min(100, score))
-          
+          score = 50 + (15 if bc < -3 else -10 if bc > 3 else 0) + (25 if fv <= 25 else -25 if fv >= 75 else 0)
           sig = '看多' if score >= 55 else '看空' if score <= 45 else '中性'
-          signal_list = '\n'.join([f'- {s}' for s in signals]) if signals else '- 暂无明显信号'
           
-          text = f'''## 行情信号 {sig}
+          text = '## 行情信号 ' + sig + chr(10) + chr(10) + '加密货币市场多空信号提醒' + chr(10) + chr(10) + '时间: ' + now.strftime('%Y/%m/%d %H:%M:%S') + chr(10) + chr(10) + '### 行情' + chr(10) + '| 币种 | 价格 | 24h涨跌 |' + chr(10) + '|:---:|---:|---:|' + chr(10) + '| BTC | \$' + str(int(bp)) + ' | ' + ('+' if bc >= 0 else '') + str(round(bc, 2)) + '% |' + chr(10) + '| ETH | \$' + str(int(ep)) + ' | ' + ('+' if ec >= 0 else '') + str(round(ec, 2)) + '% |' + chr(10) + chr(10) + '### 恐慌贪婪: ' + str(fv) + chr(10) + chr(10) + '### 信号: ' + sig + ' (' + str(score) + '分)' + chr(10) + chr(10) + '---' + chr(10) + '每10分钟自动更新'
           
-加密货币市场多空信号提醒
+          send('行情信号', text)
+          print('行情推送成功')
+          "
 
-时间: {now.strftime("%Y/%m/%d %H:%M:%S")}
-
-### 行情
-| 币种 | 价格 | 24h涨跌 |
-|:---:|---:|---:|
-| BTC | ${bp:,.0f} | {bc:+.2f}% |
-| ETH | ${ep:,.0f} | {ec:+.2f}% |
-
-### 恐慌贪婪指数: {fv} ({fc})
-
-### 信号: {sig} ({score}分)
-
-依据:
-{signal_list}
-
----
-每10分钟自动更新'''
-          
-          if send_msg(f'行情信号 {sig}', text):
-              print('行情推送成功')
-          PYEOF
-
-      - name: 2. ETH信号推送
+      - name: ETH信号
         run: |
-          python3 << 'PYEOF'
+          python3 -c "
           import urllib.request, json
           from datetime import datetime, timezone, timedelta
           
@@ -97,10 +63,10 @@ jobs:
                   return json.loads(urllib.request.urlopen(req, timeout=15).read())
               except: return None
           
-          def send_msg(title, text):
+          def send(title, text):
               msg = {'msgtype': 'markdown', 'markdown': {'title': title, 'text': text}}
               req = urllib.request.Request(WEBHOOK, data=json.dumps(msg).encode(), headers={'Content-Type': 'application/json'})
-              return json.loads(urllib.request.urlopen(req, timeout=10).read()).get('errcode') == 0
+              urllib.request.urlopen(req, timeout=10)
           
           now = datetime.now(timezone(timedelta(hours=8)))
           klines = fetch('https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=15m&limit=50')
@@ -111,51 +77,19 @@ jobs:
               
               def ema(data, period):
                   k = 2 / (period + 1)
-                  ema_val = sum(data[:period]) / period
-                  for val in data[period:]:
-                      ema_val = val * k + ema_val * (1 - k)
-                  return ema_val
+                  val = sum(data[:period]) / period
+                  for p in data[period:]:
+                      val = p * k + val * (1 - k)
+                  return val
               
               e20 = ema(closes, 20)
               e50 = ema(closes, 50)
               
-              gains, losses = [], []
-              for i in range(1, len(closes)):
-                  change = closes[i] - closes[i-1]
-                  gains.append(max(0, change))
-                  losses.append(max(0, -change))
-              avg_gain = sum(gains[-14:]) / 14
-              avg_loss = sum(losses[-14:]) / 14
-              rsi = 100 - 100 / (1 + avg_gain / avg_loss) if avg_loss > 0 else 100
+              score = 50 + (15 if price > e20 > e50 else -15 if price < e20 < e50 else 0)
+              sig = '做多' if score >= 55 else '做空' if score <= 45 else '观望'
               
-              score = 50
-              if price > e20 > e50: score += 15
-              elif price < e20 < e50: score -= 15
-              if rsi < 30: score += 15
-              elif rsi > 70: score -= 15
+              text = '## ETH信号 ' + sig + chr(10) + chr(10) + '加密货币市场多空信号提醒' + chr(10) + chr(10) + '时间: ' + now.strftime('%Y/%m/%d %H:%M:%S') + chr(10) + chr(10) + '### ETH价格: \$' + str(round(price, 2)) + chr(10) + chr(10) + '| 指标 | 数值 | 信号 |' + chr(10) + '|:---:|---:|:---:|' + chr(10) + '| EMA20 | \$' + str(round(e20, 2)) + ' | ' + ('多' if price > e20 else '空') + ' |' + chr(10) + '| EMA50 | \$' + str(round(e50, 2)) + ' | ' + ('多' if price > e50 else '空') + ' |' + chr(10) + chr(10) + '### 信号: ' + sig + ' (' + str(score) + '分)' + chr(10) + chr(10) + '---' + chr(10) + 'ETH 15分钟分析'
               
-              sig = '做多' if score >= 60 else '做空' if score <= 40 else '观望'
-              
-              text = f'''## ETH信号 {sig}
-              
-加密货币市场多空信号提醒
-
-时间: {now.strftime("%Y/%m/%d %H:%M:%S")}
-
-### ETH价格: ${price:,.2f}
-
-### 技术指标
-| 指标 | 数值 | 信号 |
-|:---:|---:|:---:|
-| EMA20 | ${e20:,.2f} | {'多' if price > e20 else '空'} |
-| EMA50 | ${e50:,.2f} | {'多' if price > e50 else '空'} |
-| RSI | {rsi:.1f} | {'超卖' if rsi < 30 else '超买' if rsi > 70 else '中性'} |
-
-### 信号: {sig} ({score}分)
-
----
-ETH 15分钟分析 | 每10分钟更新'''
-              
-              if send_msg(f'ETH信号 {sig}', text):
-                  print('ETH推送成功')
-          PYEOF
+              send('ETH信号', text)
+              print('ETH推送成功')
+          "
