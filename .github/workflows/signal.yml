@@ -81,23 +81,19 @@ jobs:
           sc = float(sol.get('priceChangePercent', 0))
           
           score = 50
-          # 24h涨跌
           if bc < -5: score += 20
           elif bc < -3: score += 15
           elif bc > 5: score -= 20
           elif bc > 3: score -= 15
           
-          # 恐慌贪婪
           if fv <= 20: score += 25
           elif fv <= 25: score += 20
           elif fv >= 80: score -= 25
           elif fv >= 75: score -= 20
           
-          # 多空比
           if btc_lr > 1.2: score -= 10
           elif btc_lr < 0.8: score += 10
           
-          # 资金费率
           if btc_fr < -0.01: score += 10
           elif btc_fr > 0.01: score -= 10
           
@@ -163,6 +159,15 @@ jobs:
           
           now = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           
+          # 恐慌贪婪指数
+          fg = fetch('https://api.alternative.me/fng/') or {}
+          fv = 50
+          if fg.get('data'):
+              try:
+                  fv = int(fg['data'][0]['value'])
+              except:
+                  pass
+          
           # 获取K线数据
           k15 = fetch('https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=15m&limit=100') or []
           k1h = fetch('https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=1h&limit=100') or []
@@ -176,7 +181,6 @@ jobs:
               price = closes[-1]
               change = round(float(ticker.get('priceChangePercent', 0)), 2)
               
-              # EMA计算
               def ema(data, period):
                   if len(data) < period:
                       return sum(data) / len(data)
@@ -186,7 +190,6 @@ jobs:
                       ema_val = val * multiplier + ema_val * (1 - multiplier)
                   return ema_val
               
-              # RSI计算
               def rsi(data, period=14):
                   gains, losses = [], []
                   for i in range(1, len(data)):
@@ -200,14 +203,12 @@ jobs:
                   rs = avg_gain / avg_loss
                   return 100 - (100 / (1 + rs))
               
-              # 布林带
               def bollinger(data, period=20):
                   sma = sum(data[-period:]) / period
                   variance = sum((x - sma) ** 2 for x in data[-period:]) / period
                   std = variance ** 0.5
                   return sma, sma + 2*std, sma - 2*std
               
-              # ATR
               def atr(klines, period=14):
                   trs = []
                   for i in range(1, len(klines)):
@@ -218,7 +219,6 @@ jobs:
                       trs.append(tr)
                   return sum(trs[-period:]) / period
               
-              # 计算各周期指标
               def get_trend(klines):
                   if not klines or len(klines) < 21:
                       return 'neutral', 50
@@ -239,7 +239,6 @@ jobs:
               t4h, s4h = get_trend(k4h)
               t1d, s1d = get_trend(k1d)
               
-              # 共振计算
               trends = [t15, t1h, t4h, t1d]
               bullish_count = trends.count('bullish')
               bearish_count = trends.count('bearish')
@@ -247,11 +246,9 @@ jobs:
               direction = '🟢 多' if bullish_count >= 2 else '🔴 空' if bearish_count >= 2 else '🟡 观望'
               resonance = f'{max(bullish_count, bearish_count)}/4'
               
-              # 总评分
               total_score = (s15 + s1h + s4h + s1d) / 4
               winrate = min(85, 55 + abs(total_score - 50) * 0.6)
               
-              # 止盈止损
               atr_val = atr(k15)
               bb_mid, bb_upper, bb_lower = bollinger(closes)
               
@@ -274,18 +271,15 @@ jobs:
                   tp2 = price + atr_val * 1.5
                   tp3 = price + atr_val * 2.0
               
-              # 订单簿模拟 (实际需要WebSocket)
               orderbook_imb = 55 + (total_score - 50) * 0.3
               ob_side = '买盘优势' if orderbook_imb > 50 else '卖盘优势'
               
-              # 仓位建议
-              risk = 0.02  # 2%风险
-              account = 4000  # 模拟账户
+              risk = 0.02
+              account = 4000
               risk_amount = account * risk
               position_size = risk_amount / (abs(entry - stop_loss) / entry)
               leverage = 3 if total_score >= 60 else 2 if total_score >= 55 else 1
               
-              # 风险回报比
               rr_ratio = abs(tp2 - entry) / abs(entry - stop_loss) if abs(entry - stop_loss) > 0 else 1
               
               nl = '\n'
@@ -321,7 +315,6 @@ jobs:
               text += f'- 建议杠杆: **{leverage}x**' + nl
               text += f'- 资金管理: 2%风险规则' + nl + nl
               
-              # 信号理由
               reasons = []
               if bullish_count >= 3: reasons.append('📈 多周期多头趋势')
               if bearish_count >= 3: reasons.append('📉 多周期空头趋势')
@@ -332,9 +325,8 @@ jobs:
               elif fv >= 75: reasons.append('😨 极度贪婪')
               
               text += '### 📝 信号理由' + nl + nl
-              text += ' • '.join(reasons[:3]) + nl + nl
+              text += ' • '.join(reasons[:3]) if reasons else '技术面中性' + nl + nl
               
-              # 风险提示
               risks = []
               if abs(orderbook_imb - 50) > 15: risks.append('⚠️ 订单簿严重失衡')
               if abs(change) > 5: risks.append('⚠️ 波动剧烈')
