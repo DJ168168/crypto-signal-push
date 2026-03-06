@@ -1,4 +1,4 @@
-name: Crypto Signal Push
+name: Crypto Signal Push Pro
 
 on:
   schedule:
@@ -9,7 +9,7 @@ jobs:
   push:
     runs-on: ubuntu-latest
     steps:
-      - name: BTC Market Signal
+      - name: BTC Market Signal Enhanced
         run: |
           python3 << 'PYEOF'
           import urllib.request, json
@@ -17,12 +17,12 @@ jobs:
           
           WEBHOOK = 'https://oapi.dingtalk.com/robot/send?access_token=198e3208234e4ccddbfb1d82a0643ee95bf92c2933cc13933fc0a93bcefe1701'
           
-          def fetch(url):
+          def fetch(url, timeout=20):
               try:
                   req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                  return json.loads(urllib.request.urlopen(req, timeout=20).read())
+                  return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
               except Exception as e:
-                  print(f'Fetch error: {e}')
+                  print(f'Fetch error {url}: {e}')
                   return None
           
           def send(title, text):
@@ -37,12 +37,19 @@ jobs:
           
           now = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           
-          # 获取价格数据
+          # ========== 基础价格数据 ==========
           btc = fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=BTCUSDT') or {}
           eth = fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=ETHUSDT') or {}
           sol = fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=SOLUSDT') or {}
           
-          # 恐慌贪婪指数
+          bp = float(btc.get('lastPrice', 0))
+          bc = float(btc.get('priceChangePercent', 0))
+          ep = float(eth.get('lastPrice', 0))
+          ec = float(eth.get('priceChangePercent', 0))
+          sp = float(sol.get('lastPrice', 0))
+          sc = float(sol.get('priceChangePercent', 0))
+          
+          # ========== 恐慌贪婪指数 ==========
           fg = fetch('https://api.alternative.me/fng/') or {}
           fv = 50
           fc = 'Neutral'
@@ -53,87 +60,208 @@ jobs:
               except:
                   pass
           
-          # 多空比和资金费率
+          # ========== 多空比 ==========
+          btc_lr = 1.0
+          eth_lr = 1.0
           try:
-              lr = fetch('https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1')
-              btc_lr = round(lr[0]['longShortRatio'], 2) if lr else 1.0
+              lr_data = fetch('https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1')
+              if lr_data:
+                  btc_lr = round(lr_data[0]['longShortRatio'], 2)
           except:
-              btc_lr = 1.0
-          
-          try:
-              fr = fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT')
-              btc_fr = float(fr[0]['fundingRate']) * 100 if fr else 0
-          except:
-              btc_fr = 0
+              pass
           
           try:
-              eth_fr_data = fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT')
-              eth_fr = float(eth_fr_data[0]['fundingRate']) * 100 if eth_fr_data else 0
+              lr_data = fetch('https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=ETHUSDT&period=5m&limit=1')
+              if lr_data:
+                  eth_lr = round(lr_data[0]['longShortRatio'], 2)
           except:
-              eth_fr = 0
+              pass
           
-          # 计算评分
-          bp = float(btc.get('lastPrice', 0))
-          bc = float(btc.get('priceChangePercent', 0))
-          ep = float(eth.get('lastPrice', 0))
-          ec = float(eth.get('priceChangePercent', 0))
-          sp = float(sol.get('lastPrice', 0))
-          sc = float(sol.get('priceChangePercent', 0))
+          # ========== 资金费率 ==========
+          btc_fr = 0
+          eth_fr = 0
+          try:
+              fr_data = fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1')
+              if fr_data:
+                  btc_fr = float(fr_data[0]['fundingRate']) * 100
+          except:
+              pass
           
+          try:
+              fr_data = fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT&limit=1')
+              if fr_data:
+                  eth_fr = float(fr_data[0]['fundingRate']) * 100
+          except:
+              pass
+          
+          # ========== 未平仓合约 (Open Interest) ==========
+          btc_oi = 0
+          eth_oi = 0
+          try:
+              oi_data = fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT')
+              if oi_data:
+                  btc_oi = float(oi_data.get('openInterest', 0)) * bp / 1e9  # 转换为BTC价值(十亿美元)
+          except:
+              pass
+          
+          try:
+              oi_data = fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=ETHUSDT')
+              if oi_data:
+                  eth_oi = float(oi_data.get('openInterest', 0)) * ep / 1e9  # 转换为ETH价值(十亿美元)
+          except:
+              pass
+          
+          # ========== 清算数据 ==========
+          liq_long = 0
+          liq_short = 0
+          try:
+              liq_data = fetch('https://fapi.binance.com/fapi/v1/allForceOrders?limit=50')
+              if liq_data:
+                  for order in liq_data:
+                      if order.get('symbol') in ['BTCUSDT', 'ETHUSDT']:
+                          if order.get('side') == 'SELL':  # 多头爆仓
+                              liq_long += float(order.get('price', 0)) * float(order.get('quantity', 0))
+                          else:  # 空头爆仓
+                              liq_short += float(order.get('price', 0)) * float(order.get('quantity', 0))
+          except:
+              pass
+          
+          # ========== 大户持仓比 (Top Trader Ratio) ==========
+          btc_top_long = 50
+          btc_top_short = 50
+          try:
+              top_data = fetch('https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=5m&limit=1')
+              if top_data:
+                  btc_top_long = round(top_data[0].get('longAccount', 0.5) * 100, 1)
+                  btc_top_short = 100 - btc_top_long
+          except:
+              pass
+          
+          # ========== 综合评分系统 ==========
           score = 50
-          if bc < -5: score += 20
-          elif bc < -3: score += 15
-          elif bc > 5: score -= 20
-          elif bc > 3: score -= 15
+          signals = []
           
-          if fv <= 20: score += 25
-          elif fv <= 25: score += 20
-          elif fv >= 80: score -= 25
-          elif fv >= 75: score -= 20
+          # 1. 24h涨跌 (-20 ~ +20)
+          if bc < -5:
+              score += 20
+              signals.append('📈 大跌反弹机会')
+          elif bc < -3:
+              score += 12
+              signals.append('📉 下跌趋势')
+          elif bc > 5:
+              score -= 20
+              signals.append('⚠️ 大涨回调风险')
+          elif bc > 3:
+              score -= 12
+              signals.append('📊 上涨趋势')
           
-          if btc_lr > 1.2: score -= 10
-          elif btc_lr < 0.8: score += 10
+          # 2. 恐慌贪婪 (-25 ~ +25)
+          if fv <= 20:
+              score += 25
+              signals.append('😨 极度恐慌=买入信号')
+          elif fv <= 25:
+              score += 20
+              signals.append('😰 恐慌区间')
+          elif fv >= 80:
+              score -= 25
+              signals.append('🤑 极度贪婪=卖出信号')
+          elif fv >= 75:
+              score -= 20
+              signals.append('😎 贪婪区间')
           
-          if btc_fr < -0.01: score += 10
-          elif btc_fr > 0.01: score -= 10
+          # 3. 多空比反向指标 (-15 ~ +15)
+          if btc_lr > 1.5:
+              score -= 15
+              signals.append(f'⚠️ 散户做多拥挤({btc_lr})')
+          elif btc_lr > 1.2:
+              score -= 8
+          elif btc_lr < 0.8:
+              score += 15
+              signals.append(f'✅ 散户做空({btc_lr})')
+          elif btc_lr < 0.7:
+              score += 8
+          
+          # 4. 资金费率 (-15 ~ +15)
+          if btc_fr < -0.05:
+              score += 15
+              signals.append('💰 费率极负=做多')
+          elif btc_fr < -0.01:
+              score += 8
+          elif btc_fr > 0.05:
+              score -= 15
+              signals.append('💸 费率极正=做空')
+          elif btc_fr > 0.01:
+              score -= 8
+          
+          # 5. 大户持仓 (-10 ~ +10)
+          if btc_top_long > 60:
+              score += 10
+              signals.append(f'🐋 大户看多({btc_top_long}%)')
+          elif btc_top_long < 40:
+              score -= 10
+              signals.append(f'🐋 大户看空({btc_top_short}%)')
+          
+          # 6. 清算数据
+          if liq_long > liq_short * 2:
+              score += 5
+              signals.append('🔥 多头爆仓完成')
+          elif liq_short > liq_long * 2:
+              score -= 5
+              signals.append('🔥 空头爆仓完成')
           
           score = max(0, min(100, score))
           
-          if score >= 65: sig = '🟢 强多'
-          elif score >= 55: sig = '🟢 偏多'
-          elif score <= 35: sig = '🔴 强空'
-          elif score <= 45: sig = '🔴 偏空'
-          else: sig = '🟡 中性'
+          # 信号判断
+          if score >= 70: sig = '🟢🟢 强烈做多'
+          elif score >= 60: sig = '🟢 偏多'
+          elif score >= 55: sig = '🟡 轻微偏多'
+          elif score <= 30: sig = '🔴🔴 强烈做空'
+          elif score <= 40: sig = '🔴 偏空'
+          elif score <= 45: sig = '🟡 轻微偏空'
+          else: sig = '🟡 中性观望'
           
-          action = '💡 考虑做多思路' if score >= 55 else '💡 考虑做空思路' if score <= 45 else '💡 观望'
+          action = '💡 考虑做多' if score >= 55 else '💡 考虑做空' if score <= 45 else '💡 观望为主'
           
           nl = '\n'
           text = '## 加密货币市场多空信号提醒' + nl + nl
           text += f'⏰ {now} (北京时间)' + nl + nl
+          
           text += '### 💰 实时行情' + nl + nl
           text += '| 币种 | 价格 | 24h涨跌 |' + nl
           text += '|:---:|:---:|:---:|' + nl
           text += f'| BTC | ${int(bp):,} | {round(bc, 2)}% |' + nl
           text += f'| ETH | ${int(ep):,} | {round(ec, 2)}% |' + nl
           text += f'| SOL | ${sp:.2f} | {round(sc, 2)}% |' + nl + nl
+          
           text += '### 😨 市场情绪' + nl + nl
           text += f'恐慌贪婪指数: **{fv}** ({fc})' + nl + nl
-          text += '### 📊 链上数据' + nl + nl
+          
+          text += '### 📊 衍生品数据' + nl + nl
           text += '| 指标 | BTC | ETH |' + nl
           text += '|:---:|:---:|:---:|' + nl
-          text += f'| 多空比 | {round(btc_lr*50, 1)}% 多 | - |' + nl
-          text += f'| 资金费率 | {btc_fr:+.4f}% | {eth_fr:+.4f}% |' + nl + nl
+          text += f'| 散户多空比 | {round(btc_lr*50, 1)}% 多 | {round(eth_lr*50, 1)}% 多 |' + nl
+          text += f'| 大户多空比 | {btc_top_long}% 多 | - |' + nl
+          text += f'| 资金费率 | {btc_fr:+.4f}% | {eth_fr:+.4f}% |' + nl
+          text += f'| 持仓量 | ${btc_oi:.2f}B | ${eth_oi:.2f}B |' + nl + nl
+          
           text += '### 🎯 综合分析' + nl + nl
           text += f'**评分**: {score}/100' + nl
           text += f'**信号**: {sig}' + nl
-          text += f'**操作建议**: {action}' + nl + nl
-          text += '---' + nl
-          text += '🤖 GitHub Actions 自动推送 | 每30分钟更新'
+          text += f'**建议**: {action}' + nl + nl
           
-          print('BTC推送:', '成功' if send('BTC市场信号', text) else '失败')
+          if signals:
+              text += '### 📝 关键信号' + nl + nl
+              for s in signals[:5]:
+                  text += f'- {s}' + nl
+              text += nl
+          
+          text += '---' + nl
+          text += '🤖 Pro版: 散户多空比·大户持仓·资金费率·持仓量·清算数据'
+          
+          print('BTC推送:', '成功' if send('BTC市场信号Pro', text) else '失败')
           PYEOF
 
-      - name: ETH Pro Signal
+      - name: ETH Pro Signal Enhanced
         run: |
           python3 << 'PYEOF'
           import urllib.request, json
@@ -141,10 +269,10 @@ jobs:
           
           WEBHOOK = 'https://oapi.dingtalk.com/robot/send?access_token=198e3208234e4ccddbfb1d82a0643ee95bf92c2933cc13933fc0a93bcefe1701'
           
-          def fetch(url):
+          def fetch(url, timeout=20):
               try:
                   req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                  return json.loads(urllib.request.urlopen(req, timeout=20).read())
+                  return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
               except:
                   return None
           
@@ -159,7 +287,7 @@ jobs:
           
           now = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           
-          # 恐慌贪婪指数
+          # 恐慌贪婪
           fg = fetch('https://api.alternative.me/fng/') or {}
           fv = 50
           if fg.get('data'):
@@ -168,7 +296,7 @@ jobs:
               except:
                   pass
           
-          # 获取K线数据
+          # K线数据
           k15 = fetch('https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=15m&limit=100') or []
           k1h = fetch('https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=1h&limit=100') or []
           k4h = fetch('https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=4h&limit=100') or []
@@ -176,63 +304,83 @@ jobs:
           
           ticker = fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=ETHUSDT') or {}
           
+          # 多空比
+          eth_lr = 1.0
+          try:
+              lr_data = fetch('https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=ETHUSDT&period=5m&limit=1')
+              if lr_data:
+                  eth_lr = round(lr_data[0]['longShortRatio'], 2)
+          except:
+              pass
+          
+          # 资金费率
+          eth_fr = 0
+          try:
+              fr_data = fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT&limit=1')
+              if fr_data:
+                  eth_fr = float(fr_data[0]['fundingRate']) * 100
+          except:
+              pass
+          
+          # 大户持仓
+          eth_top_long = 50
+          try:
+              top_data = fetch('https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=ETHUSDT&period=5m&limit=1')
+              if top_data:
+                  eth_top_long = round(top_data[0].get('longAccount', 0.5) * 100, 1)
+          except:
+              pass
+          
           if k15:
               closes = [float(x[4]) for x in k15]
+              volumes = [float(x[5]) for x in k15]
               price = closes[-1]
               change = round(float(ticker.get('priceChangePercent', 0)), 2)
               
+              # 技术指标
               def ema(data, period):
                   if len(data) < period:
                       return sum(data) / len(data)
-                  multiplier = 2 / (period + 1)
-                  ema_val = sum(data[:period]) / period
-                  for val in data[period:]:
-                      ema_val = val * multiplier + ema_val * (1 - multiplier)
-                  return ema_val
+                  m = 2 / (period + 1)
+                  e = sum(data[:period]) / period
+                  for v in data[period:]:
+                      e = v * m + e * (1 - m)
+                  return e
               
               def rsi(data, period=14):
-                  gains, losses = [], []
+                  g, l = [], []
                   for i in range(1, len(data)):
-                      diff = data[i] - data[i-1]
-                      gains.append(max(0, diff))
-                      losses.append(max(0, -diff))
-                  avg_gain = sum(gains[-period:]) / period
-                  avg_loss = sum(losses[-period:]) / period
-                  if avg_loss == 0:
-                      return 100
-                  rs = avg_gain / avg_loss
-                  return 100 - (100 / (1 + rs))
+                      d = data[i] - data[i-1]
+                      g.append(max(0, d))
+                      l.append(max(0, -d))
+                  ag = sum(g[-period:]) / period
+                  al = sum(l[-period:]) / period
+                  return 100 - 100 / (1 + ag / al) if al > 0 else 100
               
-              def bollinger(data, period=20):
-                  sma = sum(data[-period:]) / period
-                  variance = sum((x - sma) ** 2 for x in data[-period:]) / period
-                  std = variance ** 0.5
-                  return sma, sma + 2*std, sma - 2*std
+              def macd(data):
+                  e12 = ema(data, 12)
+                  e26 = ema(data, 26)
+                  dif = e12 - e26
+                  return dif
               
               def atr(klines, period=14):
                   trs = []
                   for i in range(1, len(klines)):
-                      h = float(klines[i][2])
-                      l = float(klines[i][3])
-                      pc = float(klines[i-1][4])
-                      tr = max(h - l, abs(h - pc), abs(l - pc))
-                      trs.append(tr)
+                      h, l, pc = float(klines[i][2]), float(klines[i][3]), float(klines[i-1][4])
+                      trs.append(max(h - l, abs(h - pc), abs(l - pc)))
                   return sum(trs[-period:]) / period
               
               def get_trend(klines):
                   if not klines or len(klines) < 21:
                       return 'neutral', 50
-                  closes = [float(x[4]) for x in klines]
-                  e7 = ema(closes, 7)
-                  e21 = ema(closes, 21)
-                  r = rsi(closes)
-                  
-                  if closes[-1] > e7 > e21 and r < 70:
+                  c = [float(x[4]) for x in klines]
+                  e7, e21 = ema(c, 7), ema(c, 21)
+                  r = rsi(c)
+                  if c[-1] > e7 > e21 and r < 70:
                       return 'bullish', 70 + (70 - r) * 0.5
-                  elif closes[-1] < e7 < e21 and r > 30:
+                  elif c[-1] < e7 < e21 and r > 30:
                       return 'bearish', 30 - (r - 30) * 0.5
-                  else:
-                      return 'neutral', r
+                  return 'neutral', r
               
               t15, s15 = get_trend(k15)
               t1h, s1h = get_trend(k1h)
@@ -243,22 +391,113 @@ jobs:
               bullish_count = trends.count('bullish')
               bearish_count = trends.count('bearish')
               
-              direction = '🟢 多' if bullish_count >= 2 else '🔴 空' if bearish_count >= 2 else '🟡 观望'
+              # 成交量分析
+              avg_vol = sum(volumes[-20:]) / 20
+              cur_vol = volumes[-1]
+              vol_ratio = cur_vol / avg_vol if avg_vol > 0 else 1
+              
+              # MACD
+              macd_val = macd(closes)
+              
+              # RSI
+              rsi_val = rsi(closes)
+              
+              # ATR
+              atr_val = atr(k15)
+              
+              # 综合评分
+              score = 50
+              reasons = []
+              
+              # 多周期趋势
+              if bullish_count >= 3:
+                  score += 20
+                  reasons.append('📈 多周期多头共振')
+              elif bullish_count >= 2:
+                  score += 10
+              elif bearish_count >= 3:
+                  score -= 20
+                  reasons.append('📉 多周期空头共振')
+              elif bearish_count >= 2:
+                  score -= 10
+              
+              # RSI
+              if rsi_val < 30:
+                  score += 15
+                  reasons.append(f'📊 RSI超卖({int(rsi_val)})')
+              elif rsi_val < 40:
+                  score += 8
+              elif rsi_val > 70:
+                  score -= 15
+                  reasons.append(f'📊 RSI超买({int(rsi_val)})')
+              elif rsi_val > 60:
+                  score -= 8
+              
+              # 散户多空比反向
+              if eth_lr > 1.3:
+                  score -= 10
+                  reasons.append(f'⚠️ 散户做多拥挤({eth_lr})')
+              elif eth_lr < 0.8:
+                  score += 10
+                  reasons.append(f'✅ 散户做空({eth_lr})')
+              
+              # 资金费率
+              if eth_fr < -0.03:
+                  score += 10
+                  reasons.append('💰 负费率支撑')
+              elif eth_fr > 0.03:
+                  score -= 10
+                  reasons.append('💸 正费率压力')
+              
+              # 大户持仓
+              if eth_top_long > 55:
+                  score += 8
+                  reasons.append(f'🐋 大户看多({eth_top_long}%)')
+              elif eth_top_long < 45:
+                  score -= 8
+                  reasons.append(f'🐋 大户看空({100-eth_top_long}%)')
+              
+              # 成交量
+              if vol_ratio > 2:
+                  reasons.append('📢 放量突破' if bullish_count >= 2 else '📢 放量下跌')
+              elif vol_ratio < 0.5:
+                  reasons.append('🔇 缩量整理')
+              
+              # 恐慌贪婪
+              if fv <= 25:
+                  score += 10
+              elif fv >= 75:
+                  score -= 10
+              
+              score = max(0, min(100, score))
+              
+              # 方向判断
+              if score >= 65:
+                  direction = '🟢 做多'
+                  winrate = min(85, 60 + (score - 65))
+              elif score >= 55:
+                  direction = '🟢 轻仓多'
+                  winrate = min(75, 55 + (score - 55))
+              elif score <= 35:
+                  direction = '🔴 做空'
+                  winrate = min(85, 60 + (35 - score))
+              elif score <= 45:
+                  direction = '🔴 轻仓空'
+                  winrate = min(75, 55 + (45 - score))
+              else:
+                  direction = '🟡 观望'
+                  winrate = 50
+              
               resonance = f'{max(bullish_count, bearish_count)}/4'
               
-              total_score = (s15 + s1h + s4h + s1d) / 4
-              winrate = min(85, 55 + abs(total_score - 50) * 0.6)
-              
-              atr_val = atr(k15)
-              bb_mid, bb_upper, bb_lower = bollinger(closes)
-              
-              if direction == '🟢 多':
+              # 止盈止损
+              if '多' in direction:
                   entry = price
                   stop_loss = price - atr_val * 1.5
                   tp1 = price + atr_val * 1.0
                   tp2 = price + atr_val * 1.5
                   tp3 = price + atr_val * 2.0
-              elif direction == '🔴 空':
+              elif '空' in direction:
                   entry = price
                   stop_loss = price + atr_val * 1.5
                   tp1 = price - atr_val * 1.0
@@ -267,20 +506,17 @@ jobs:
               else:
                   entry = price
                   stop_loss = price - atr_val * 1.5
-                  tp1 = price + atr_val * 1.0
+                  tp1 = price + atr_val
                   tp2 = price + atr_val * 1.5
                   tp3 = price + atr_val * 2.0
               
-              orderbook_imb = 55 + (total_score - 50) * 0.3
-              ob_side = '买盘优势' if orderbook_imb > 50 else '卖盘优势'
+              rr_ratio = abs(tp2 - entry) / abs(entry - stop_loss) if abs(entry - stop_loss) > 0 else 1
               
+              # 仓位建议
               risk = 0.02
               account = 4000
-              risk_amount = account * risk
-              position_size = risk_amount / (abs(entry - stop_loss) / entry)
-              leverage = 3 if total_score >= 60 else 2 if total_score >= 55 else 1
-              
-              rr_ratio = abs(tp2 - entry) / abs(entry - stop_loss) if abs(entry - stop_loss) > 0 else 1
+              leverage = 3 if score >= 60 else 2 if score >= 55 else 1
+              position = account * risk / abs((entry - stop_loss) / entry)
               
               nl = '\n'
               text = '## 🚀 ETH Pro版短线信号' + nl + nl
@@ -291,54 +527,45 @@ jobs:
               text += '### 🔄 多周期框架' + nl + nl
               text += '| 周期 | 方向 | 强度 |' + nl
               text += '|:---:|:---:|:---:|' + nl
-              text += f'| 15m | {"🟢" if t15=="bullish" else "🔴" if t15=="bearish" else "🟡"} | {int(s15)}% |' + nl
-              text += f'| 1h | {"🟢" if t1h=="bullish" else "🔴" if t1h=="bearish" else "🟡"} | {int(s1h)}% |' + nl
-              text += f'| 4h | {"🟢" if t4h=="bullish" else "🔴" if t4h=="bearish" else "🟡"} | {int(s4h)}% |' + nl
-              text += f'| 1d | {"🟢" if t1d=="bullish" else "🔴" if t1d=="bearish" else "🟡"} | {int(s1d)}% |' + nl + nl
-              text += f'**共振**: {resonance} 周期一致' + nl + nl
+              for t, s, n in [(t15, s15, '15m'), (t1h, s1h, '1h'), (t4h, s4h, '4h'), (t1d, s1d, '1d')]:
+                  icon = '🟢' if t == 'bullish' else '🔴' if t == 'bearish' else '🟡'
+                  text += f'| {n} | {icon} | {int(s)}% |' + nl
+              text += f'| **共振** | {resonance} | 一致 |' + nl + nl
+              
+              text += '### 📊 技术指标' + nl + nl
+              text += f'- RSI: {int(rsi_val)} {"超卖" if rsi_val < 30 else "超买" if rsi_val > 70 else ""}' + nl
+              text += f'- MACD: {"多头" if macd_val > 0 else "空头"}' + nl
+              text += f'- 成交量: {vol_ratio:.1f}x 平均' + nl + nl
+              
+              text += '### 💰 链上情绪' + nl + nl
+              text += f'- 散户多空比: {round(eth_lr*50, 1)}% 多' + nl
+              text += f'- 大户持仓: {eth_top_long}% 多' + nl
+              text += f'- 资金费率: {eth_fr:+.4f}%' + nl + nl
               
               text += '### 🎯 止盈止损' + nl + nl
               text += '| 类型 | 价格 | 变化 |' + nl
               text += '|:---:|:---:|:---:|' + nl
-              text += f'| **入场** | ${int(entry):,} | - |' + nl
-              text += f'| **止损** | ${int(stop_loss):,} | {((stop_loss-entry)/entry*100):.2f}% |' + nl
+              text += f'| 入场 | ${int(entry):,} | - |' + nl
+              text += f'| 止损 | ${int(stop_loss):,} | {((stop_loss-entry)/entry*100):.2f}% |' + nl
               text += f'| TP1 | ${int(tp1):,} | {((tp1-entry)/entry*100):.2f}% |' + nl
               text += f'| TP2 | ${int(tp2):,} | {((tp2-entry)/entry*100):.2f}% |' + nl
               text += f'| TP3 | ${int(tp3):,} | {((tp3-entry)/entry*100):.2f}% |' + nl + nl
               text += f'**风险回报比**: 1:{rr_ratio:.2f}' + nl + nl
               
-              text += '### 📊 订单簿分析' + nl + nl
-              text += f'- 不平衡度: **{orderbook_imb:.1f}%** ({ob_side})' + nl + nl
-              
               text += '### 📐 智能仓位' + nl + nl
-              text += f'- 建议仓位: **{position_size:.4f} ETH**' + nl
-              text += f'- 建议杠杆: **{leverage}x**' + nl
-              text += f'- 资金管理: 2%风险规则' + nl + nl
+              text += f'- 建议仓位: {position:.4f} ETH' + nl
+              text += f'- 建议杠杆: {leverage}x' + nl
+              text += f'- 风险控制: 2%规则' + nl + nl
               
-              reasons = []
-              if bullish_count >= 3: reasons.append('📈 多周期多头趋势')
-              if bearish_count >= 3: reasons.append('📉 多周期空头趋势')
-              if resonance == '3/4' or resonance == '4/4': reasons.append(f'🔄 {resonance}周期共振')
-              if orderbook_imb > 55: reasons.append('📊 订单簿买盘强势')
-              elif orderbook_imb < 45: reasons.append('📊 订单簿卖盘强势')
-              if fv <= 25: reasons.append('😨 极度恐慌')
-              elif fv >= 75: reasons.append('😨 极度贪婪')
-              
-              text += '### 📝 信号理由' + nl + nl
-              text += ' • '.join(reasons[:3]) if reasons else '技术面中性' + nl + nl
-              
-              risks = []
-              if abs(orderbook_imb - 50) > 15: risks.append('⚠️ 订单簿严重失衡')
-              if abs(change) > 5: risks.append('⚠️ 波动剧烈')
-              if leverage >= 5: risks.append('⚠️ 高杠杆风险')
-              
-              if risks:
-                  text += '### ⚠️ 风险提示' + nl + nl
-                  text += ' '.join(risks) + nl + nl
+              if reasons:
+                  text += '### 📝 信号理由' + nl + nl
+                  for r in reasons[:5]:
+                      text += f'- {r}' + nl
+                  text += nl
               
               text += f'⏰ {now}' + nl
               text += '---' + nl
-              text += 'Pro版: 多周期·订单簿·资金费率·大户追踪·智能仓位'
+              text += 'Pro版: 多周期·技术指标·散户反向·大户持仓·资金费率'
               
               print('ETH Pro推送:', '成功' if send('ETH Pro信号', text) else '失败')
           PYEOF
@@ -392,13 +619,13 @@ jobs:
           text += '| 盈亏比 | 2.99:1 |' + nl
           text += '| 累计盈亏 | +$512.68 (+14.7%) |' + nl + nl
           
-          text += '### 🎯 今日操作建议' + nl + nl
+          text += '### 🎯 操作建议' + nl + nl
           text += '- 市场恐慌情绪较高,维持空头仓位' + nl
           text += '- 若BTC跌破$70,000可加仓' + nl
           text += '- 止盈目标: BTC $68,000 / ETH $2,000 / SOL $85' + nl + nl
           
           text += '---' + nl
-          text += '🤖 自动交易系统 | 风险提示: 模拟盘仅供学习参考'
+          text += '🤖 自动交易系统 | 模拟盘仅供学习参考'
           
           print('日报推送:', '成功' if send('模拟盘日报', text) else '失败')
           PYEOF
